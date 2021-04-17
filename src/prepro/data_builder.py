@@ -172,11 +172,10 @@ class BertData():
         if (len(labels) == 0):
             return None
 
-        src_txt = [' '.join(sent) for sent in src]
-        # text = [' '.join(ex['src_txt'][i].split()[:self.args.max_src_ntokens]) for i in idxs]
-        # text = [_clean(t) for t in text]
+        src_txt = [' '.join(self.tokenizer.tokenize(' '.join(sent))) for sent in src]
+        
         text = ' [SEP] [CLS] '.join(src_txt)
-        src_subtokens = self.tokenizer.tokenize(text)
+        src_subtokens = text.split()
         src_subtokens = src_subtokens[:510]
         src_subtokens = ['[CLS]'] + src_subtokens + ['[SEP]']
 
