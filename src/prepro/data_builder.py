@@ -17,26 +17,36 @@ from others.logging import logger
 from others.utils import clean
 from prepro.utils import _get_word_ngrams
 
+file_count = 0
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from tokenization_kobert import KoBertTokenizer
+
 
 def load_json(p, lower):
+    global file_count
     source = []
     tgt = []
     flag = False
-    for sent in json.load(open(p))['sentences']:
-        tokens = [t['word'] for t in sent['tokens']]
-        if (lower):
+
+    for sent in json.load(open(p))["sentences"]:
+        tokens = [t["word"] for t in sent["tokens"]]
+        if lower:
             tokens = [t.lower() for t in tokens]
-        if (tokens[0] == '@highlight'):
+        if tokens[0] == "@highlight":
             flag = True
             continue
-        if (flag):
+        if flag:
             tgt.append(tokens)
             flag = False
         else:
             source.append(tokens)
 
-    source = [clean(' '.join(sent)).split() for sent in source]
-    tgt = [clean(' '.join(sent)).split() for sent in tgt]
+    file_count += 1
+    print(f"file count : {file_count}")
+    source = [clean(" ".join(sent)).split() for sent in source]
+    tgt = [clean(" ".join(sent)).split() for sent in tgt]
     return source, tgt
 
 
@@ -63,13 +73,13 @@ def cal_rouge(evaluated_ngrams, reference_ngrams):
 
 def combination_selection(doc_sent_list, abstract_sent_list, summary_size):
     def _rouge_clean(s):
-        return re.sub(r'[^a-zA-Z0-9 ]', '', s)
+        return re.sub(r"[^a-zA-Z0-9 ]", "", s)
 
     max_rouge = 0.0
     max_idx = (0, 0)
     abstract = sum(abstract_sent_list, [])
-    abstract = _rouge_clean(' '.join(abstract)).split()
-    sents = [_rouge_clean(' '.join(s)).split() for s in doc_sent_list]
+    abstract = _rouge_clean(" ".join(abstract)).split()
+    sents = [_rouge_clean(" ".join(s)).split() for s in doc_sent_list]
     evaluated_1grams = [_get_word_ngrams(1, [sent]) for sent in sents]
     reference_1grams = _get_word_ngrams(1, [abstract])
     evaluated_2grams = [_get_word_ngrams(2, [sent]) for sent in sents]
@@ -77,17 +87,19 @@ def combination_selection(doc_sent_list, abstract_sent_list, summary_size):
 
     impossible_sents = []
     for s in range(summary_size + 1):
-        combinations = itertools.combinations([i for i in range(len(sents)) if i not in impossible_sents], s + 1)
+        combinations = itertools.combinations(
+            [i for i in range(len(sents)) if i not in impossible_sents], s + 1
+        )
         for c in combinations:
             candidates_1 = [evaluated_1grams[idx] for idx in c]
             candidates_1 = set.union(*map(set, candidates_1))
             candidates_2 = [evaluated_2grams[idx] for idx in c]
             candidates_2 = set.union(*map(set, candidates_2))
-            rouge_1 = cal_rouge(candidates_1, reference_1grams)['f']
-            rouge_2 = cal_rouge(candidates_2, reference_2grams)['f']
+            rouge_1 = cal_rouge(candidates_1, reference_1grams)["f"]
+            rouge_2 = cal_rouge(candidates_2, reference_2grams)["f"]
 
             rouge_score = rouge_1 + rouge_2
-            if (s == 0 and rouge_score == 0):
+            if s == 0 and rouge_score == 0:
                 impossible_sents.append(c[0])
             if rouge_score > max_rouge:
                 max_idx = c
@@ -97,12 +109,12 @@ def combination_selection(doc_sent_list, abstract_sent_list, summary_size):
 
 def greedy_selection(doc_sent_list, abstract_sent_list, summary_size):
     def _rouge_clean(s):
-        return re.sub(r'[^a-zA-Z0-9 ]', '', s)
+        return re.sub(r"[^a-zA-Z0-9 ]", "", s)
 
     max_rouge = 0.0
     abstract = sum(abstract_sent_list, [])
-    abstract = _rouge_clean(' '.join(abstract)).split()
-    sents = [_rouge_clean(' '.join(s)).split() for s in doc_sent_list]
+    abstract = _rouge_clean(" ".join(abstract)).split()
+    sents = [_rouge_clean(" ".join(s)).split() for s in doc_sent_list]
     evaluated_1grams = [_get_word_ngrams(1, [sent]) for sent in sents]
     reference_1grams = _get_word_ngrams(1, [abstract])
     evaluated_2grams = [_get_word_ngrams(2, [sent]) for sent in sents]
@@ -113,20 +125,20 @@ def greedy_selection(doc_sent_list, abstract_sent_list, summary_size):
         cur_max_rouge = max_rouge
         cur_id = -1
         for i in range(len(sents)):
-            if (i in selected):
+            if i in selected:
                 continue
             c = selected + [i]
             candidates_1 = [evaluated_1grams[idx] for idx in c]
             candidates_1 = set.union(*map(set, candidates_1))
             candidates_2 = [evaluated_2grams[idx] for idx in c]
             candidates_2 = set.union(*map(set, candidates_2))
-            rouge_1 = cal_rouge(candidates_1, reference_1grams)['f']
-            rouge_2 = cal_rouge(candidates_2, reference_2grams)['f']
+            rouge_1 = cal_rouge(candidates_1, reference_1grams)["f"]
+            rouge_2 = cal_rouge(candidates_2, reference_2grams)["f"]
             rouge_score = rouge_1 + rouge_2
             if rouge_score > cur_max_rouge:
                 cur_max_rouge = rouge_score
                 cur_id = i
-        if (cur_id == -1):
+        if cur_id == -1:
             return selected
         selected.append(cur_id)
         max_rouge = cur_max_rouge
@@ -137,24 +149,30 @@ def greedy_selection(doc_sent_list, abstract_sent_list, summary_size):
 def hashhex(s):
     """Returns a heximal formated SHA1 hash of the input string."""
     h = hashlib.sha1()
-    h.update(s.encode('utf-8'))
+    h.update(s.encode("utf-8"))
     return h.hexdigest()
 
 
-class BertData():
+class BertData:
     def __init__(self, args):
         self.args = args
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
-        self.sep_vid = self.tokenizer.vocab['[SEP]']
-        self.cls_vid = self.tokenizer.vocab['[CLS]']
-        self.pad_vid = self.tokenizer.vocab['[PAD]']
+        self.tokenizer = KoBertTokenizer.from_pretrained("monologg/kobert")
+        self.sep_vid = self.tokenizer.token2idx[self.tokenizer.sep_token]
+        self.cls_vid = self.tokenizer.token2idx[self.tokenizer.cls_token]
+        self.pad_vid = self.tokenizer.token2idx[self.tokenizer.pad_token]
 
-    def preprocess(self, src, tgt, oracle_ids):
+        # self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
+        # self.sep_vid = self.tokenizer.vocab['[SEP]']
+        # self.cls_vid = self.tokenizer.vocab['[CLS]']
+        # self.pad_vid = self.tokenizer.vocab['[PAD]']
 
-        if (len(src) == 0):
+    def preprocess_dacon(self, source, oracle_ids):
+
+        if len(source) == 0:
             return None
 
-        original_src_txt = [' '.join(s) for s in src]
+        original_src_txt = source
+        src = [s.split() for s in source]
 
         labels = [0] * len(src)
         for l in oracle_ids:
@@ -162,58 +180,110 @@ class BertData():
 
         idxs = [i for i, s in enumerate(src) if (len(s) > self.args.min_src_ntokens)]
 
-        src = [src[i][:self.args.max_src_ntokens] for i in idxs]
+        src = [src[i][: self.args.max_src_ntokens] for i in idxs]
         labels = [labels[i] for i in idxs]
-        src = src[:self.args.max_nsents]
-        labels = labels[:self.args.max_nsents]
+        src = src[: self.args.max_nsents]
+        labels = labels[: self.args.max_nsents]
 
-        if (len(src) < self.args.min_nsents):
+        if len(src) < self.args.min_nsents:
             return None
-        if (len(labels) == 0):
+        if len(labels) == 0:
             return None
 
-        src_txt = [' '.join(sent) for sent in src]
-        # text = [' '.join(ex['src_txt'][i].split()[:self.args.max_src_ntokens]) for i in idxs]
-        # text = [_clean(t) for t in text]
-        text = ' [SEP] [CLS] '.join(src_txt)
-        src_subtokens = self.tokenizer.tokenize(text)
+        src_txt = [" ".join(self.tokenizer.tokenize(" ".join(sent))) for sent in src]
+
+        text = " [SEP] [CLS] ".join(src_txt)
+        src_subtokens = text.split()
         src_subtokens = src_subtokens[:510]
-        src_subtokens = ['[CLS]'] + src_subtokens + ['[SEP]']
+        src_subtokens = ["[CLS]"] + src_subtokens + ["[SEP]"]
 
         src_subtoken_idxs = self.tokenizer.convert_tokens_to_ids(src_subtokens)
         _segs = [-1] + [i for i, t in enumerate(src_subtoken_idxs) if t == self.sep_vid]
         segs = [_segs[i] - _segs[i - 1] for i in range(1, len(_segs))]
         segments_ids = []
         for i, s in enumerate(segs):
-            if (i % 2 == 0):
+            if i % 2 == 0:
                 segments_ids += s * [0]
             else:
                 segments_ids += s * [1]
         cls_ids = [i for i, t in enumerate(src_subtoken_idxs) if t == self.cls_vid]
-        labels = labels[:len(cls_ids)]
+        labels = labels[: len(cls_ids)]
 
-        tgt_txt = '<q>'.join([' '.join(tt) for tt in tgt])
+        src_txt = [original_src_txt[i] for i in idxs]
+        return src_subtoken_idxs, labels, segments_ids, cls_ids, src_txt
+
+    def preprocess(self, src, tgt, oracle_ids):
+
+        if len(src) == 0:
+            return None
+
+        original_src_txt = [" ".join(s) for s in src]
+
+        labels = [0] * len(src)
+        for l in oracle_ids:
+            labels[l] = 1
+
+        idxs = [i for i, s in enumerate(src) if (len(s) > self.args.min_src_ntokens)]
+
+        src = [src[i][: self.args.max_src_ntokens] for i in idxs]
+        labels = [labels[i] for i in idxs]
+        src = src[: self.args.max_nsents]
+        labels = labels[: self.args.max_nsents]
+
+        if len(src) < self.args.min_nsents:
+            return None
+        if len(labels) == 0:
+            return None
+
+        src_txt = [" ".join(self.tokenizer.tokenize(" ".join(sent))) for sent in src]
+
+        text = " [SEP] [CLS] ".join(src_txt)
+        src_subtokens = text.split()
+        src_subtokens = src_subtokens[:510]
+        src_subtokens = ["[CLS]"] + src_subtokens + ["[SEP]"]
+
+        src_subtoken_idxs = self.tokenizer.convert_tokens_to_ids(src_subtokens)
+        _segs = [-1] + [i for i, t in enumerate(src_subtoken_idxs) if t == self.sep_vid]
+        segs = [_segs[i] - _segs[i - 1] for i in range(1, len(_segs))]
+        segments_ids = []
+        for i, s in enumerate(segs):
+            if i % 2 == 0:
+                segments_ids += s * [0]
+            else:
+                segments_ids += s * [1]
+        cls_ids = [i for i, t in enumerate(src_subtoken_idxs) if t == self.cls_vid]
+        labels = labels[: len(cls_ids)]
+
+        tgt_txt = "<q>".join([" ".join(tt) for tt in tgt])
         src_txt = [original_src_txt[i] for i in idxs]
         return src_subtoken_idxs, labels, segments_ids, cls_ids, src_txt, tgt_txt
 
 
 def format_to_bert(args):
-    if (args.dataset != ''):
+    if args.dataset != "":
         datasets = [args.dataset]
     else:
-        datasets = ['train', 'valid', 'test']
+        datasets = ["train", "valid", "test"]
     for corpus_type in datasets:
         a_lst = []
-        for json_f in glob.glob(pjoin(args.raw_path, '*' + corpus_type + '.*.json')):
-            real_name = json_f.split('/')[-1]
-            a_lst.append((json_f, args, pjoin(args.save_path, real_name.replace('json', 'bert.pt'))))
+        for json_f in glob.glob(pjoin(args.raw_path, "*" + corpus_type + ".*.json")):
+            real_name = json_f.split("/")[-1]
+            a_lst.append(
+                (
+                    json_f,
+                    args,
+                    pjoin(args.save_path, real_name.replace("json", "bert.pt")),
+                )
+            )
         print(a_lst)
-        pool = Pool(args.n_cpus)
-        for d in pool.imap(_format_to_bert, a_lst):
-            pass
 
-        pool.close()
-        pool.join()
+        _format_to_bert(a_lst[0])
+        # pool = Pool(args.n_cpus)
+        # for d in pool.imap(_format_to_bert, a_lst):
+        #     pass
+
+        # pool.close()
+        # pool.join()
 
 
 def tokenize(args):
@@ -226,11 +296,27 @@ def tokenize(args):
     print("Making list of files to tokenize...")
     with open("mapping_for_corenlp.txt", "w") as f:
         for s in stories:
-            if (not s.endswith('story')):
+            if not s.endswith("story"):
                 continue
             f.write("%s\n" % (os.path.join(stories_dir, s)))
-    command = ['java', 'edu.stanford.nlp.pipeline.StanfordCoreNLP' ,'-annotators', 'tokenize,ssplit', '-ssplit.newlineIsSentenceBreak', 'always', '-filelist', 'mapping_for_corenlp.txt', '-outputFormat', 'json', '-outputDirectory', tokenized_stories_dir]
-    print("Tokenizing %i files in %s and saving in %s..." % (len(stories), stories_dir, tokenized_stories_dir))
+    command = [
+        "java",
+        "edu.stanford.nlp.pipeline.StanfordCoreNLP",
+        "-annotators",
+        "tokenize,ssplit",
+        "-ssplit.newlineIsSentenceBreak",
+        "always",
+        "-filelist",
+        "mapping_for_corenlp.txt",
+        "-outputFormat",
+        "json",
+        "-outputDirectory",
+        tokenized_stories_dir,
+    ]
+    print(
+        "Tokenizing %i files in %s and saving in %s..."
+        % (len(stories), stories_dir, tokenized_stories_dir)
+    )
     subprocess.call(command)
     print("Stanford CoreNLP Tokenizer has finished.")
     os.remove("mapping_for_corenlp.txt")
@@ -240,36 +326,99 @@ def tokenize(args):
     num_tokenized = len(os.listdir(tokenized_stories_dir))
     if num_orig != num_tokenized:
         raise Exception(
-            "The tokenized stories directory %s contains %i files, but it should contain the same number as %s (which has %i files). Was there an error during tokenization?" % (
-            tokenized_stories_dir, num_tokenized, stories_dir, num_orig))
-    print("Successfully finished tokenizing %s to %s.\n" % (stories_dir, tokenized_stories_dir))
+            "The tokenized stories directory %s contains %i files, but it should contain the same number as %s (which has %i files). Was there an error during tokenization?"
+            % (tokenized_stories_dir, num_tokenized, stories_dir, num_orig)
+        )
+    print(
+        "Successfully finished tokenizing %s to %s.\n"
+        % (stories_dir, tokenized_stories_dir)
+    )
+
+
+def _format_to_bert_dacon(corpus_type, dataset, args):
+    bert = BertData(args)
+
+    size = 3000
+    list_of_dfs = [dataset[i : i + size - 1] for i in range(0, len(dataset), size)]
+    for i, df in enumerate(list_of_dfs):
+        datasets = []
+        save_file = os.path.join(args.save_path, f"dacon.{corpus_type}.{i}.bert.pt")
+        for i, item in df.iterrows():
+            source = item["article_original"]
+            oracle_ids = item["extractive"]
+            b_data = bert.preprocess_dacon(source, oracle_ids)
+            if b_data is None:
+                continue
+            indexed_tokens, labels, segments_ids, cls_ids, src_txt = b_data
+            b_data_dict = {
+                "src": indexed_tokens,
+                "labels": labels,
+                "segs": segments_ids,
+                "clss": cls_ids,
+                "src_txt": src_txt,
+                "tgt_txt": item["abstractive"],
+            }
+            datasets.append(b_data_dict)
+        logger.info("Saving to %s" % save_file)
+        torch.save(datasets, save_file)
+
+    datasets = []
+    gc.collect()
+
+
+def format_to_bert_dacon(args):
+    def load_jsonl(input_path) -> list:
+        """
+        Read list of objects from a JSON lines file.
+        """
+        data = []
+        with open(input_path, "r", encoding="utf-8") as f:
+            for line in f:
+                data.append(json.loads(line.rstrip("\n|\r")))
+        print("Loaded {} records from {}".format(len(data), input_path))
+        return data
+
+    dacon_list = load_jsonl(os.path.join(args.raw_path, "train.jsonl"))
+    df = pd.DataFrame(dacon_list)
+
+    train, eval = train_test_split(df, test_size=0.2, random_state=42)
+    valid, test = train_test_split(eval, test_size=0.5, random_state=42)
+
+    for corpus_type, dataset in {"train": train, "valid": valid, "test": test}.items():
+        _format_to_bert_dacon(corpus_type, dataset, args)
 
 
 def _format_to_bert(params):
     json_file, args, save_file = params
-    if (os.path.exists(save_file)):
-        logger.info('Ignore %s' % save_file)
-        return
+    # if os.path.exists(save_file):
+    #     logger.info("Ignore %s" % save_file)
+    #     return
 
     bert = BertData(args)
 
-    logger.info('Processing %s' % json_file)
+    logger.info("Processing %s" % json_file)
     jobs = json.load(open(json_file))
     datasets = []
     for d in jobs:
-        source, tgt = d['src'], d['tgt']
-        if (args.oracle_mode == 'greedy'):
+        source, tgt = d["src"], d["tgt"]
+        if args.oracle_mode == "greedy":
             oracle_ids = greedy_selection(source, tgt, 3)
-        elif (args.oracle_mode == 'combination'):
+        elif args.oracle_mode == "combination":
             oracle_ids = combination_selection(source, tgt, 3)
         b_data = bert.preprocess(source, tgt, oracle_ids)
-        if (b_data is None):
+        if b_data is None:
             continue
         indexed_tokens, labels, segments_ids, cls_ids, src_txt, tgt_txt = b_data
-        b_data_dict = {"src": indexed_tokens, "labels": labels, "segs": segments_ids, 'clss': cls_ids,
-                       'src_txt': src_txt, "tgt_txt": tgt_txt}
+        b_data_dict = {
+            "src": indexed_tokens,
+            "labels": labels,
+            "segs": segments_ids,
+            "clss": cls_ids,
+            "src_txt": src_txt,
+            "tgt_txt": tgt_txt,
+        }
         datasets.append(b_data_dict)
-    logger.info('Saving to %s' % save_file)
+    logger.info("Saving to %s" % save_file)
     torch.save(datasets, save_file)
     datasets = []
     gc.collect()
@@ -277,32 +426,34 @@ def _format_to_bert(params):
 
 def format_to_lines(args):
     corpus_mapping = {}
-    for corpus_type in ['valid', 'test', 'train']:
+    for corpus_type in ["valid", "test", "train"]:
         temp = []
-        for line in open(pjoin(args.map_path, 'mapping_' + corpus_type + '.txt')):
+        for line in open(pjoin(args.map_path, "mapping_" + corpus_type + ".txt")):
             temp.append(hashhex(line.strip()))
         corpus_mapping[corpus_type] = {key.strip(): 1 for key in temp}
     train_files, valid_files, test_files = [], [], []
-    for f in glob.glob(pjoin(args.raw_path, '*.json')):
-        real_name = f.split('/')[-1].split('.')[0]
-        if (real_name in corpus_mapping['valid']):
+    for f in glob.glob(pjoin(args.raw_path, "*.json")):
+        real_name = f.split("/")[-1].split(".")[0]
+        if real_name in corpus_mapping["valid"]:
             valid_files.append(f)
-        elif (real_name in corpus_mapping['test']):
+        elif real_name in corpus_mapping["test"]:
             test_files.append(f)
-        elif (real_name in corpus_mapping['train']):
+        elif real_name in corpus_mapping["train"]:
             train_files.append(f)
 
-    corpora = {'train': train_files, 'valid': valid_files, 'test': test_files}
-    for corpus_type in ['train', 'valid', 'test']:
+    corpora = {"train": train_files, "valid": valid_files, "test": test_files}
+    for corpus_type in ["train", "valid", "test"]:
         a_lst = [(f, args) for f in corpora[corpus_type]]
         pool = Pool(args.n_cpus)
         dataset = []
         p_ct = 0
         for d in pool.imap_unordered(_format_to_lines, a_lst):
             dataset.append(d)
-            if (len(dataset) > args.shard_size):
-                pt_file = "{:s}.{:s}.{:d}.json".format(args.save_path, corpus_type, p_ct)
-                with open(pt_file, 'w') as save:
+            if len(dataset) > args.shard_size:
+                pt_file = "{:s}.{:s}.{:d}.json".format(
+                    args.save_path, corpus_type, p_ct
+                )
+                with open(pt_file, "w") as save:
                     # save.write('\n'.join(dataset))
                     save.write(json.dumps(dataset))
                     p_ct += 1
@@ -310,9 +461,9 @@ def format_to_lines(args):
 
         pool.close()
         pool.join()
-        if (len(dataset) > 0):
+        if len(dataset) > 0:
             pt_file = "{:s}.{:s}.{:d}.json".format(args.save_path, corpus_type, p_ct)
-            with open(pt_file, 'w') as save:
+            with open(pt_file, "w") as save:
                 # save.write('\n'.join(dataset))
                 save.write(json.dumps(dataset))
                 p_ct += 1
@@ -323,4 +474,5 @@ def _format_to_lines(params):
     f, args = params
     print(f)
     source, tgt = load_json(f, args.lower)
-    return {'src': source, 'tgt': tgt}
+    return {"src": source, "tgt": tgt}
+
