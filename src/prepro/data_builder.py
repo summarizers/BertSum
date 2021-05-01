@@ -18,6 +18,11 @@ from others.utils import clean
 from prepro.utils import _get_word_ngrams
 
 
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from tokenization_kobert import KoBertTokenizer
+
+
 def load_json(p, lower):
     source = []
     tgt = []
@@ -146,12 +151,61 @@ def hashhex(s):
 class BertData:
     def __init__(self, args):
         self.args = args
-        self.tokenizer = BertTokenizer.from_pretrained(
-            "bert-base-uncased", do_lower_case=True
-        )
-        self.sep_vid = self.tokenizer.vocab["[SEP]"]
-        self.cls_vid = self.tokenizer.vocab["[CLS]"]
-        self.pad_vid = self.tokenizer.vocab["[PAD]"]
+        self.tokenizer = KoBertTokenizer.from_pretrained("monologg/kobert")
+        self.sep_vid = self.tokenizer.token2idx[self.tokenizer.sep_token]
+        self.cls_vid = self.tokenizer.token2idx[self.tokenizer.cls_token]
+        self.pad_vid = self.tokenizer.token2idx[self.tokenizer.pad_token]
+
+        # self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
+        # self.sep_vid = self.tokenizer.vocab['[SEP]']
+        # self.cls_vid = self.tokenizer.vocab['[CLS]']
+        # self.pad_vid = self.tokenizer.vocab['[PAD]']
+
+    def preprocess_dacon(self, source, oracle_ids):
+
+        if len(source) == 0:
+            return None
+
+        original_src_txt = source
+        src = [s.split() for s in source]
+
+        labels = [0] * len(src)
+        for l in oracle_ids:
+            labels[l] = 1
+
+        idxs = [i for i, s in enumerate(src) if (len(s) > self.args.min_src_ntokens)]
+
+        src = [src[i][: self.args.max_src_ntokens] for i in idxs]
+        labels = [labels[i] for i in idxs]
+        src = src[: self.args.max_nsents]
+        labels = labels[: self.args.max_nsents]
+
+        if len(src) < self.args.min_nsents:
+            return None
+        if len(labels) == 0:
+            return None
+
+        src_txt = [" ".join(self.tokenizer.tokenize(" ".join(sent))) for sent in src]
+
+        text = " [SEP] [CLS] ".join(src_txt)
+        src_subtokens = text.split()
+        src_subtokens = src_subtokens[:510]
+        src_subtokens = ["[CLS]"] + src_subtokens + ["[SEP]"]
+
+        src_subtoken_idxs = self.tokenizer.convert_tokens_to_ids(src_subtokens)
+        _segs = [-1] + [i for i, t in enumerate(src_subtoken_idxs) if t == self.sep_vid]
+        segs = [_segs[i] - _segs[i - 1] for i in range(1, len(_segs))]
+        segments_ids = []
+        for i, s in enumerate(segs):
+            if i % 2 == 0:
+                segments_ids += s * [0]
+            else:
+                segments_ids += s * [1]
+        cls_ids = [i for i, t in enumerate(src_subtoken_idxs) if t == self.cls_vid]
+        labels = labels[: len(cls_ids)]
+
+        src_txt = [original_src_txt[i] for i in idxs]
+        return src_subtoken_idxs, labels, segments_ids, cls_ids, src_txt
 
     def preprocess(self, src, tgt, oracle_ids):
 
@@ -217,12 +271,14 @@ def format_to_bert(args):
                 )
             )
         print(a_lst)
-        pool = Pool(args.n_cpus)
-        for d in pool.imap(_format_to_bert, a_lst):
-            pass
 
-        pool.close()
-        pool.join()
+        _format_to_bert(a_lst[0])
+        # pool = Pool(args.n_cpus)
+        # for d in pool.imap(_format_to_bert, a_lst):
+        #     pass
+
+        # pool.close()
+        # pool.join()
 
 
 def tokenize(args):
@@ -272,6 +328,59 @@ def tokenize(args):
         "Successfully finished tokenizing %s to %s.\n"
         % (stories_dir, tokenized_stories_dir)
     )
+
+
+def _format_to_bert_dacon(corpus_type, dataset, args):
+    bert = BertData(args)
+
+    size = 3000
+    list_of_dfs = [dataset[i : i + size - 1] for i in range(0, len(dataset), size)]
+    for i, df in enumerate(list_of_dfs):
+        datasets = []
+        save_file = os.path.join(args.save_path, f"dacon.{corpus_type}.{i}.bert.pt")
+        for i, item in df.iterrows():
+            source = item["article_original"]
+            oracle_ids = item["extractive"]
+            b_data = bert.preprocess_dacon(source, oracle_ids)
+            if b_data is None:
+                continue
+            indexed_tokens, labels, segments_ids, cls_ids, src_txt = b_data
+            b_data_dict = {
+                "src": indexed_tokens,
+                "labels": labels,
+                "segs": segments_ids,
+                "clss": cls_ids,
+                "src_txt": src_txt,
+                "tgt_txt": item["abstractive"],
+            }
+            datasets.append(b_data_dict)
+        logger.info("Saving to %s" % save_file)
+        torch.save(datasets, save_file)
+
+    datasets = []
+    gc.collect()
+
+
+def format_to_bert_dacon(args):
+    def load_jsonl(input_path) -> list:
+        """
+        Read list of objects from a JSON lines file.
+        """
+        data = []
+        with open(input_path, "r", encoding="utf-8") as f:
+            for line in f:
+                data.append(json.loads(line.rstrip("\n|\r")))
+        print("Loaded {} records from {}".format(len(data), input_path))
+        return data
+
+    dacon_list = load_jsonl(os.path.join(args.raw_path, "train.jsonl"))
+    df = pd.DataFrame(dacon_list)
+
+    train, eval = train_test_split(df, test_size=0.2, random_state=42)
+    valid, test = train_test_split(eval, test_size=0.5, random_state=42)
+
+    for corpus_type, dataset in {"train": train, "valid": valid, "test": test}.items():
+        _format_to_bert_dacon(corpus_type, dataset, args)
 
 
 def _format_to_bert(params):
