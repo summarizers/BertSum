@@ -192,7 +192,7 @@ def validate(args, device_id, pt, step):
     print(args)
 
     config = BertConfig.from_json_file(args.bert_config_path)
-    model = Summarizer(args, device, load_pretrained_bert=False, bert_config=config)
+    model = Summarizer(args, device, load_pretrained_bert=True, bert_config=config)
     model.load_cp(checkpoint)
     model.eval()
 
@@ -225,7 +225,7 @@ def test(args, device_id, pt, step):
     print(args)
 
     config = BertConfig.from_json_file(args.bert_config_path)
-    model = Summarizer(args, device, load_pretrained_bert=False, bert_config=config)
+    model = Summarizer(args, device, load_pretrained_bert=True, bert_config=config)
     model.load_cp(checkpoint)
     model.eval()
 
@@ -320,11 +320,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "-mode", default="train", type=str, choices=["train", "validate", "test"]
     )
-    parser.add_argument("-bert_data_path", default="../bert_data/cnndm")
+    parser.add_argument("-bert_data_path", default="../bert_data/dacon")
     parser.add_argument("-model_path", default="../models/bert_classifier")
-    parser.add_argument("-result_path", default="../results/cnndm")
+    parser.add_argument("-result_path", default="../results/dacon")
     parser.add_argument("-temp_dir", default="../temp")
-    parser.add_argument("-bert_config_path", default="../bert_config_uncased_base.json")
+    parser.add_argument("-bert_config_path", default="../kobert_config.json")
 
     parser.add_argument("-batch_size", default=3000, type=int)
 
@@ -366,7 +366,7 @@ if __name__ == "__main__":
     parser.add_argument("-seed", default=666, type=int)
 
     parser.add_argument(
-        "-test_all", type=str2bool, nargs="?", const=True, default=False
+        "-test_all", type=str2bool, nargs="?", const=True, defaul=
     )
     parser.add_argument("-test_from", default="")
     parser.add_argument("-train_from", default="")
